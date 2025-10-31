@@ -1,0 +1,172 @@
+import cv2
+import numpy as np
+import opensmile
+from deepface import DeepFace
+import time
+import json
+import sys
+
+class MultimodalEmotionDetector:
+    def __init__(self):
+        # OpenSmile setup for emotion recognition from speech
+        self.smile = opensmile.Smile(
+            feature_set=opensmile.FeatureSet.emobase,
+            feature_level=opensmile.FeatureLevel.Functionals,
+        )
+        
+        # Current emotions
+        self.current_face_emotion = None
+        self.current_voice_emotion = "neutral"
+        self.current_combined_emotion = "neutral"
+        self.face_confidence = 0
+        
+    def analyze_voice_emotion(self):
+        """Analyze emotion from voice using OpenSmile - simplified version"""
+        try:
+            # For demo purposes, using a simplified voice emotion detection
+            # In real implementation, you would capture audio and process it
+            emotions = ['neutral', 'happy', 'sad', 'angry', 'surprised']
+            # Simulate voice emotion detection (replace with actual audio processing)
+            return np.random.choice(emotions, p=[0.4, 0.2, 0.15, 0.15, 0.1])
+            
+        except Exception as e:
+            return "neutral"
+    
+    def analyze_face_emotion(self, frame):
+        """Analyze emotion from face using DeepFace"""
+        try:
+            analysis = DeepFace.analyze(
+                img_path=frame,
+                actions=['emotion'],
+                enforce_detection=False,
+                detector_backend='opencv',
+                silent=True
+            )
+            
+            if isinstance(analysis, list):
+                analysis = analysis[0]
+            
+            return analysis['dominant_emotion'], analysis['emotion'], analysis.get('region', {})
+        except Exception as e:
+            return None, {}, {}
+    
+    def combine_emotions(self, face_emotion, voice_emotion, face_confidence):
+        """Combine face and voice emotions with voice weight 20-25%"""
+        # Voice weight reduced to 20-25%
+        if face_emotion and face_confidence > 50:
+            weight_face = 0.8  # 80% weight to face
+            weight_voice = 0.2  # 20% weight to voice
+        else:
+            weight_face = 0.75  # 75% weight to face
+            weight_voice = 0.25  # 25% weight to voice
+        
+        # Emotion priority system
+        emotion_priority = {
+            'angry': 4, 'fear': 3, 'sad': 2, 'neutral': 1, 
+            'happy': 5, 'surprised': 3, 'disgust': 2
+        }
+        
+        face_score = emotion_priority.get(face_emotion.lower() if face_emotion else 'neutral', 1)
+        voice_score = emotion_priority.get(voice_emotion.lower() if voice_emotion else 'neutral', 1)
+        
+        combined_score = (face_score * weight_face + voice_score * weight_voice)
+        
+        # Return the emotion with higher weighted score
+        if combined_score >= 4:
+            return "happy"
+        elif combined_score >= 3:
+            return face_emotion if weight_face > weight_voice else voice_emotion
+        else:
+            return "neutral"
+    
+    def output_emotion_json(self, combined_emotion, face_confidence):
+        """Output emotion data as JSON for backend"""
+        # Convert numpy float to Python float for JSON serialization
+        confidence_float = float(face_confidence) if face_confidence else 0.0
+        
+        emotion_data = {
+            "emotion": combined_emotion,
+            "confidence": round(confidence_float, 1)
+        }
+        print(json.dumps(emotion_data))
+        sys.stdout.flush()
+    
+    def draw_bounding_box(self, frame, region):
+        """Draw only the face bounding box"""
+        if region:
+            x, y, w, h = region['x'], region['y'], region['w'], region['h']
+            # Draw green bounding box around face
+            cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+    
+    def run(self):
+        """Main function to run multimodal emotion detection"""
+        # Setup camera
+        cap = cv2.VideoCapture(0)
+        if not cap.isOpened():
+            print("Error: Could not open camera", file=sys.stderr)
+            return
+        
+        # Set camera resolution for better performance
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        
+        print("Starting emotion detection...", file=sys.stderr)
+        print("Press 'q' to quit", file=sys.stderr)
+        
+        # Voice analysis interval
+        last_voice_analysis = time.time()
+        voice_analysis_interval = 3  # Analyze voice every 3 seconds
+        
+        try:
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                
+                # Analyze face emotion
+                face_emotion, emotion_dict, region = self.analyze_face_emotion(frame)
+                face_confidence = emotion_dict.get(face_emotion, 0) if face_emotion else 0
+                
+                # Update current emotions
+                self.current_face_emotion = face_emotion
+                self.face_confidence = face_confidence
+                
+                # Analyze voice emotion periodically
+                current_time = time.time()
+                if current_time - last_voice_analysis >= voice_analysis_interval:
+                    self.current_voice_emotion = self.analyze_voice_emotion()
+                    last_voice_analysis = current_time
+                
+                # Combine emotions with reduced voice weight
+                combined_emotion = self.combine_emotions(
+                    face_emotion, self.current_voice_emotion, face_confidence
+                )
+                
+                # Output JSON for backend (only emotion and confidence)
+                self.output_emotion_json(combined_emotion, face_confidence)
+                
+                # Draw only the bounding box on the frame
+                self.draw_bounding_box(frame, region)
+                
+                # Display frame with only bounding box
+                cv2.imshow('Face Detection', frame)
+                
+                # Handle key presses
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord('q'):
+                    break
+                
+        except KeyboardInterrupt:
+            print("Stopping emotion detection...", file=sys.stderr)
+        except Exception as e:
+            print(f"Error: {e}", file=sys.stderr)
+        finally:
+            # Cleanup
+            cap.release()
+            cv2.destroyAllWindows()
+            print("Emotion detection stopped.", file=sys.stderr)
+
+# Run the multimodal emotion detector
+if __name__ == "__main__":
+    detector = MultimodalEmotionDetector()
+    detector.run()
